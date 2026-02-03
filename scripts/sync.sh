@@ -11,7 +11,7 @@
 
 set -e
 
-REPO_DIR="$HOME/openclaw-lailaibot"
+REPO_DIR="$HOME/openclaw"
 OPENCLAW_DIR="$HOME/.openclaw"
 
 # 顏色輸出

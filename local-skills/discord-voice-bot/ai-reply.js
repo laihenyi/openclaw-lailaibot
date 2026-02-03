@@ -1,8 +1,8 @@
 // AI Reply using OpenRouter Step 3.5 Flash (Free) with Web Search
-const OPENROUTER_API_KEY = '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';
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const MODEL = 'stepfun/step-3.5-flash:free';
-const BRAVE_API_KEY = 'BSAyU5YQOKI_0X_y_jY7f2IB6dIotJZ';
+const BRAVE_API_KEY = process.env.BRAVE_API_KEY || '';
 const BRAVE_SEARCH_URL = 'https://api.search.brave.com/res/v1/web/search';
 
 // Keywords that trigger web search

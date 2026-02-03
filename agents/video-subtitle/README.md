@@ -1,47 +1,80 @@
 # Video Subtitle Agent
 
-影片下載和字幕生成 Discord Bot。
+專門負責影片下載和繁體中文字幕生成的 Agent。
 
-## 功能
+## 功能特色
 
-- 下載 YouTube/Bilibili 影片
-- 使用 Whisper (GPU) 生成字幕
-- 自動翻譯成繁體中文
-- 嵌入字幕到影片中
-- 支援 DM、@mention、語音頻道
+- 📥 **多網站支援**：YouTube、Bilibili、抖音、TikTok 等
+- 🇹🇳 **Whisper 整合**：大型語言模型（large-v3）
+- 🎬 **繁體中文**：zh-TW 語言代碼
+- 📤 **File Server**：自動提供下載連結
+- 🧹 **自動清理**：舊檔案（超過 60 天）
 
-## 技術棧
+## 指令列表
 
-- **Whisper**: `large-v3-turbo` 模型 (GPU/CUDA 12.4)
-- **翻譯**: deep-translator + OpenCC (簡轉繁)
-- **下載**: yt-dlp
-- **字幕嵌入**: ffmpeg
+| 指令 | 說明 | 參數 | 範例 |
+|------|--------|------|------|
+| `!download` | 下載影片並生成字幕 | URL, 解析度 | `!download https://youtu.be/xxx` |
+| `!subtitle` | 為影片添加字幕 | 影片路徑 | `!subtitle /path/to/video.mp4` |
+| `!cleanup` | 清理舊檔案 | - | `!cleanup` |
 
-## 指令
+## 使用範例
 
-| 指令 | 說明 |
-|------|------|
-| `!download <URL>` | 下載影片並生成字幕 |
-| `!subtitle <路徑>` | 為影片生成字幕 |
-| `!join` | 加入語音頻道 |
-| `!leave` | 離開語音頻道 |
-| `!status` | 查看狀態 |
-| `進度` | 查詢任務進度 |
+### 下載 YouTube 影片
+```
+用戶：幫忙下載這個 YouTube 影片，要繁體中文字幕
 
-## 安裝
-
-```bash
-cd agents/video-subtitle
-npm install
+Agent：🎬 開始下載...
+✅ 影片下載完成：影片標題.mp4
+✅ 音訊提取完成
+✅ 字幕生成完成：影片標題_zh-TW.srt
+✅ 字幕嵌入完成：影片標題_with_subs.mp4
+📤 下載連結：http://192.168.100.100:18800/影片標題_with_subs.mp4
 ```
 
-## 執行
+### 為已有影片添加字幕
+```
+用戶：幫忙這個影片添加繁體中文字幕
 
-```bash
-VIDEO_SUBTITLE_BOT_TOKEN="your-token" node bot.js
+Agent：🎬 提取音訊...
+✅ 音訊提取完成
+✅ 字幕生成完成：影片_zh-TW.srt
+✅ 字幕嵌入完成：影片_with_subs.mp4
+📤 下載連結：http://192.168.100.100:18800/影片_with_subs.mp4
 ```
 
-## 環境變數
+## 技術細節
 
-- `VIDEO_SUBTITLE_BOT_TOKEN` - Discord Bot Token (必填)
-- `OPENROUTER_API_KEY` - OpenRouter API Key (用於 AI 回覆)
+### Whisper 配置
+- **模型**：faster-whisper large-v3
+- **語言**：zh-TW（繁體中文）
+- **輸出**：SRT 格式
+- **GPU**：CPU 模式（可在腳本中修改）
+
+### FFmpeg 操作
+- **影片編碼**：H.264（copy）
+- **音訊編碼**：AAC（copy）
+- **字幕嵌入**：mov_text 軟體
+
+### 支援的解析度
+- 360p（快速）
+- 720p（預設，平衡品質）
+- 1080p（高清）
+- 4K（超清）
+
+## 注意事項
+
+- **網路連線**：下載需要穩定的網路連線
+- **磁碟空間**：確保下載目錄有足夠空間
+- **FFmpeg**：需要系統已安裝 `ffmpeg`
+
+## 常見問題
+
+**Q: 下載失敗？**
+A: 檢查網路連線，確認網站可存取
+
+**Q: 字幕生成很慢？**
+A: Whisper 需要處理時間，影片越長越慢
+
+**Q: 字幕準確度不高？**
+A: 可以嘗試 `large-v3-turbo` 模型（更快但準確度略低）

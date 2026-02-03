@@ -3,3 +3,4 @@ venv/
 *.log
 .env
 recordings/
+tts_output/

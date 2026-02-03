@@ -4,3 +4,4 @@ node_modules/
 recordings/
 tts_output/
 memory/
+venv/

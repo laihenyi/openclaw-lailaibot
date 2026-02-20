@@ -52,6 +52,10 @@ const client = new Client({
 const subscribers = new Map();
 const pushedSlots = new Set();
 
+// 訊息去重 (防止 Discord 事件重複觸發)
+const processedMessages = new Set();
+const DEDUP_TIMEOUT = 10000; // 10 秒內相同訊息不重複處理
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -63,51 +67,59 @@ function get24hAgo() {
 // ==================== 數據來源 ====================
 
 /**
- * GitHub Trending (使用官方 Trending 頁面爬取 + 新項目發現)
+ * GitHub Trending (使用 OSS Insight API + GitHub Search API)
  * 指標：24hr 內 stars 增速
  */
 async function fetchGitHubTrending(limit = 8) {
   try {
     const results = [];
 
-    // 方法 1: 使用第三方 Trending API
+    // 方法 1: 使用 OSS Insight Trending API (TiDB 提供，穩定可靠)
     try {
-      const trendingUrl = 'https://api.gitterapp.com/repositories?language=&since=daily';
+      const trendingUrl = 'https://api.ossinsight.io/v1/trends/repos?period=past_24_hours';
       const trendingRes = await fetch(trendingUrl, {
-        headers: { 'User-Agent': 'AI-Trends-Bot' }
+        headers: { 'User-Agent': 'AI-Trends-Bot/1.0' }
       });
 
       if (trendingRes.ok) {
-        const trending = await trendingRes.json();
-        const aiRepos = trending.filter(r =>
-          r.description?.toLowerCase().match(/\b(ai|llm|gpt|machine learning|deep learning|neural|transformer|language model)\b/)
-        ).slice(0, limit);
+        const data = await trendingRes.json();
+        const repos = data.data?.rows || [];
+
+        // 過濾 AI 相關項目
+        const aiRepos = repos.filter(r => {
+          const desc = (r.description || '').toLowerCase();
+          const name = (r.repo_name || '').toLowerCase();
+          return desc.match(/\b(ai|llm|gpt|claude|machine learning|deep learning|neural|transformer|language model|chatbot|agent)\b/) ||
+                 name.match(/\b(ai|llm|gpt|claude|agent)\b/);
+        }).slice(0, limit);
 
         for (const repo of aiRepos) {
           results.push({
-            name: `${repo.author}/${repo.name}`,
+            name: repo.repo_name,
             description: repo.description?.substring(0, 120) || '無描述',
-            stars: repo.stars || 0,
-            starsToday: repo.currentPeriodStars || 0,
-            url: repo.url || `https://github.com/${repo.author}/${repo.name}`,
-            language: repo.language || '未知',
-            isHot: (repo.currentPeriodStars || 0) > 100
+            stars: parseInt(repo.stars) || 0,
+            starsToday: parseInt(repo.stars) || 0, // OSS Insight 數據為 24hr 趨勢
+            url: `https://github.com/${repo.repo_name}`,
+            language: repo.primary_language || '未知',
+            isHot: parseInt(repo.stars) > 500
           });
         }
       }
     } catch (e) {
-      console.error('[GitHub Trending API] Error:', e.message);
+      console.error('[OSS Insight API] Error:', e.message);
     }
 
-    // 方法 2: 搜尋 24hr 內創建的高 stars 新項目
+    // 方法 2: 搜尋熱門 AI 項目 (GitHub Search API)
     if (results.length < limit) {
-      const since = get24hAgo().toISOString().split('T')[0];
       const queries = [
-        `created:>${since} stars:>50 (AI OR LLM OR GPT OR "machine learning")`,
-        `created:>${since} stars:>30 topic:llm`
+        'topic:llm stars:>1000',
+        'topic:ai stars:>500 pushed:>2026-02-01',
+        '(AI OR LLM OR GPT OR Claude) stars:>100'
       ];
 
       for (const q of queries) {
+        if (results.length >= limit) break;
+
         const url = `https://api.github.com/search/repositories?q=${encodeURIComponent(q)}&sort=stars&order=desc&per_page=5`;
         const response = await fetch(url, {
           headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'AI-Trends-Bot' }
@@ -121,11 +133,10 @@ async function fetchGitHubTrending(limit = 8) {
                 name: repo.full_name,
                 description: repo.description?.substring(0, 120) || '無描述',
                 stars: repo.stargazers_count,
-                starsToday: repo.stargazers_count, // 新項目，所有 stars 都是近期的
+                starsToday: Math.round(repo.stargazers_count / 30), // 估算每日增量
                 url: repo.html_url,
                 language: repo.language || '未知',
-                isHot: true,
-                isNew: true
+                isHot: repo.stargazers_count > 10000
               });
             }
           }
@@ -146,21 +157,38 @@ async function fetchGitHubTrending(limit = 8) {
 }
 
 /**
- * Hacker News (24hr 內發布，按 points/hour 熱度排序)
+ * Hacker News (48hr 內發布，按 points/hour 熱度排序)
  * 指標：points per hour (熱度增速)
  */
 async function fetchHackerNews(limit = 8) {
   try {
-    const timestamp24hAgo = Math.floor(get24hAgo().getTime() / 1000);
-    const url = `https://hn.algolia.com/api/v1/search?query=AI OR LLM OR GPT OR Claude OR OpenAI OR Anthropic OR "machine learning"&tags=story&numericFilters=created_at_i>${timestamp24hAgo}&hitsPerPage=30`;
+    // 使用 search_by_date 獲取最新高分文章，然後在本地過濾 AI 相關
+    const timestamp48hAgo = Math.floor((Date.now() - 48 * 60 * 60 * 1000) / 1000);
+    const numericFilter = encodeURIComponent(`created_at_i>${timestamp48hAgo},points>20`);
+    const url = `https://hn.algolia.com/api/v1/search_by_date?tags=story&numericFilters=${numericFilter}&hitsPerPage=100`;
 
+    console.log(`[HN] Fetching recent stories...`);
     const response = await fetch(url);
-    if (!response.ok) return [];
+    if (!response.ok) {
+      console.error(`[HN] HTTP error: ${response.status}`);
+      return [];
+    }
 
     const data = await response.json();
     const now = Date.now() / 1000;
 
-    return (data.hits || [])
+    // AI 相關關鍵字過濾
+    const aiKeywords = /\b(ai|llm|gpt|claude|openai|anthropic|gemini|llama|mistral|machine learning|deep learning|neural|transformer|chatbot|copilot|agent|rag|embedding)\b/i;
+
+    const aiStories = (data.hits || [])
+      .filter(item => {
+        const text = `${item.title || ''} ${item.story_text || ''}`.toLowerCase();
+        return aiKeywords.test(text);
+      });
+
+    console.log(`[HN] Got ${data.hits?.length || 0} total, ${aiStories.length} AI-related`);
+
+    return aiStories
       .map(item => {
         const ageHours = Math.max(1, (now - item.created_at_i) / 3600);
         const pointsPerHour = item.points / ageHours;
@@ -175,7 +203,6 @@ async function fetchHackerNews(limit = 8) {
           isHot: pointsPerHour > 20
         };
       })
-      .filter(item => item.points > 5)
       .sort((a, b) => b.pointsPerHour - a.pointsPerHour)
       .slice(0, limit);
 
@@ -777,10 +804,24 @@ async function handleMessage(message, content) {
 // ==================== 事件監聽 ====================
 
 client.on(Events.MessageCreate, async (message) => {
+  // Debug: 記錄所有收到的訊息事件
+  console.log(`[Event] MessageCreate: id=${message.id}, partial=${message.partial}, author=${message.author?.tag || 'unknown'}`);
+
   if (message.author.bot) return;
+
+  // 訊息去重：使用 message.id 作為唯一識別
+  const msgKey = message.id;
+  if (processedMessages.has(msgKey)) {
+    console.log(`[Debug] Skipping duplicate message: ${msgKey}`);
+    return;
+  }
+  processedMessages.add(msgKey);
+  setTimeout(() => processedMessages.delete(msgKey), DEDUP_TIMEOUT);
 
   const isDM = message.channel.type === ChannelType.DM;
   const isMention = message.mentions.has(client.user);
+
+  console.log(`[Debug] Processing: id=${message.id}, isDM=${isDM}, isMention=${isMention}, content="${message.content}"`);
 
   if (isDM || isMention) {
     const content = message.content.replace(/<@!?\d+>/g, '').trim();
